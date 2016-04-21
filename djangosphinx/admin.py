@@ -1,6 +1,7 @@
 from django.contrib.admin.views.main import *
 from django.contrib.admin import ModelAdmin
 from djangosphinx.models import SphinxQuerySet
+from django.core.paginator import Paginator
 
 class SphinxModelAdmin(ModelAdmin):
     index = None
@@ -9,7 +10,7 @@ class SphinxModelAdmin(ModelAdmin):
     search_fields = ['pk']
     actions = None
     
-    def queryset(self, request):
+    def get_queryset(self, request):
         return SphinxQuerySet(
             model=self.model,
             index=self.index,
@@ -19,7 +20,7 @@ class SphinxModelAdmin(ModelAdmin):
         return SphinxChangeList
 
 class SphinxChangeList(ChangeList):
-    def get_query_set(self):
+    def get_queryset(self):
         qs = self.root_query_set
         lookup_params = self.params.copy() # a dictionary of the query string
         for i in (ALL_VAR, ORDER_VAR, ORDER_TYPE_VAR, SEARCH_VAR, IS_POPUP_VAR):

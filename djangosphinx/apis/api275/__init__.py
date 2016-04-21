@@ -322,7 +322,7 @@ class SphinxClient:
 		assert(values)
 
 		for value in values:
-			assert(isinstance(value, (int, long)))
+			assert(isinstance(value, int))
 
 		self._filters.append ( { 'type':SPH_FILTER_VALUES, 'attr':attribute, 'exclude':exclude, 'values':values } )
 

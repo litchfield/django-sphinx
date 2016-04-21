@@ -15,7 +15,7 @@ except ImportError:
 from django.db.models.query import QuerySet, Q
 from django.conf import settings
 
-__all__ = ('SearchError', 'ConnectionError', 'SphinxSearch', 'SphinxRelation', 'SphinxQuerySet')
+__all__ = ('SearchError', 'ConnectionError', 'SphinxSearch', 'SphinxRelation', 'SphinxQuerySet', 'escape_query')
 
 from django.contrib.contenttypes.models import ContentType
 from datetime import datetime, date
@@ -204,6 +204,9 @@ class SphinxQuerySet(object):
         self.__metadata             = None
         self._offset                = 0
         self._limit                 = 20
+        self._defer                 = []
+        self._pkonly                = False
+        self._setselect             = None
 
         self._groupby               = None
         self._sort                  = None
@@ -279,7 +282,7 @@ class SphinxQuerySet(object):
         kwargs = dict([('_%s' % (key,), value) for key, value in kwargs.iteritems() if key in self.available_kwargs])
         return kwargs
 
-    def get_query_set(self, model):
+    def get_queryset(self, model):
         qs = model._default_manager
         if self.using:
             qs = qs.db_manager(self.using)
@@ -289,11 +292,19 @@ class SphinxQuerySet(object):
         kwargs = self._format_options(**kwargs)
         return self._clone(**kwargs)
 
-    def query(self, string):
-        return self._clone(_query=unicode(string).encode('utf-8'))
+    def query(self, string, escape=False):
+        s = unicode(string).encode('utf-8')
+        if escape:
+            s = escape_query(s)
+        return self._clone(_query=s)
 
-    def group_by(self, attribute, func, groupsort='@group desc'):
+    def group_by(self, attribute, func='SPH_GROUPBY_ATTR', groupsort='@group desc'):
+        if isinstance(func, str):
+            func = getattr(sphinxapi, func)
         return self._clone(_groupby=attribute, _groupfunc=func, _groupsort=groupsort)
+
+    def select(self, expressions):
+        return self._clone(_setselect=expressions)
 
     def rank_none(self):
         warnings.warn('`rank_none()` is deprecated. Use `set_options(rankmode=None)` instead.', DeprecationWarning)
@@ -348,7 +359,8 @@ class SphinxQuerySet(object):
         return self._clone(_excludes=filters)
 
     def escape(self, value):
-        return re.sub(r"([=\(\)|\-!@~\"&/\\\^\$\=])", r"\\\1", value)
+        # Awkward to use it externally from here so moved it
+        return escape_query(value)
 
     # you cannot order by @weight (it always orders in descending)
     # keywords are @id, @weight, @rank, and @relevance
@@ -394,6 +406,12 @@ class SphinxQuerySet(object):
     def reset(self):
         return self.__class__(self.model, self._index)
 
+    def defer(self, *fields):
+        return self._clone(_defer=fields)
+
+    def pkonly(self):
+        return self._clone(_pkonly=True)
+        
     # Internal methods
     def _get_sphinx_client(self):
         client = sphinxapi.SphinxClient()
@@ -505,6 +523,10 @@ class SphinxQuerySet(object):
             params.append('groupby=%s' % (self._groupby,))
             client.SetGroupBy(self._groupby, self._groupfunc, self._groupsort)
 
+        if self._setselect:
+            params.append('select=%s' % (self._setselect,))
+            client.SetSelect(self._setselect)
+
         if self._anchor:
             params.append('geoanchor=%s' % (self._anchor,))
             client.SetGeoAnchor(*self._anchor)
@@ -570,7 +592,9 @@ class SphinxQuerySet(object):
             
         if self.model:
             if results['matches']:
-                queryset = self.get_query_set(self.model)
+                if self._pkonly:
+                    return results['matches']
+                queryset = self.get_queryset(self.model)
                 if self._select_related:
                     queryset = queryset.select_related(*self._select_related_fields, **self._select_related_args)
                 if self._extra:
@@ -594,6 +618,8 @@ class SphinxQuerySet(object):
                     for r in results['matches']:
                         r['id'] = unicode(r['id'])
                     queryset = queryset.filter(pk__in=[r['id'] for r in results['matches']])
+                if self._defer:
+                    queryset = queryset.defer(*self._defer)
                 queryset = dict([(', '.join([unicode(getattr(o, p.attname)) for p in pks]), o) for o in queryset])
 
                 if self._passages:
@@ -626,9 +652,9 @@ class SphinxQuerySet(object):
                                 objcache[ct][r['id']] = r['id'] = val
                     
                         q = reduce(operator.or_, [reduce(operator.and_, [Q(**{p.name: r['attrs'][p.column]}) for p in pks]) for r in results['matches'] if r['attrs']['content_type'] == ct])
-                        queryset = self.get_query_set(model_class).filter(q)
+                        queryset = self.get_queryset(model_class).filter(q)
                     else:
-                        queryset = self.get_query_set(model_class).filter(pk__in=[r['id'] for r in results['matches'] if r['attrs']['content_type'] == ct])
+                        queryset = self.get_queryset(model_class).filter(pk__in=[r['id'] for r in results['matches'] if r['attrs']['content_type'] == ct])
 
                     for o in queryset:
                         objcache[ct][', '.join([unicode(getattr(o, p.name)) for p in pks])] = o
@@ -673,29 +699,32 @@ class SphinxModelManager(object):
         self._index = kwargs.pop('index', model._meta.db_table)
         self._kwargs = kwargs
     
-    def _get_query_set(self):
+    def _get_queryset(self):
         return SphinxQuerySet(self.model, index=self._index, **self._kwargs)
     
     def get_index(self):
         return self._index
     
     def all(self):
-        return self._get_query_set()
+        return self._get_queryset()
     
     def none(self):
-        return self._get_query_set().none()
+        return self._get_queryset().none()
     
     def filter(self, **kwargs):
-        return self._get_query_set().filter(**kwargs)
+        return self._get_queryset().filter(**kwargs)
+
+    def exclude(self, **kwargs):
+        return self._get_queryset().exclude(**kwargs)
     
     def query(self, *args, **kwargs):
-        return self._get_query_set().query(*args, **kwargs)
+        return self._get_queryset().query(*args, **kwargs)
 
     def on_index(self, *args, **kwargs):
-        return self._get_query_set().on_index(*args, **kwargs)
+        return self._get_queryset().on_index(*args, **kwargs)
 
     def geoanchor(self, *args, **kwargs):
-        return self._get_query_set().geoanchor(*args, **kwargs)
+        return self._get_queryset().geoanchor(*args, **kwargs)
 
 class SphinxInstanceManager(object):
     """Collection of tools useful for objects which are in a Sphinx index."""
@@ -725,7 +754,7 @@ class SphinxSearch(object):
             return SphinxInstanceManager(instance, self._index)
         return self._sphinx
     
-    def get_query_set(self):
+    def get_queryset(self):
         """Override this method to change the QuerySet used for config generation."""
         return self.model._default_manager.all()
     
@@ -794,7 +823,7 @@ class SphinxRelation(SphinxSearch):
                     ids.append(value)
                 else:
                     ids.extend()
-            qs = self.get_query_set(self.model).filter(pk__in=set(ids))
+            qs = self.get_queryset(self.model).filter(pk__in=set(ids))
             if self._select_related:
                 qs = qs.select_related(*self._select_related_fields,
                                        **self._select_related_args)
@@ -812,9 +841,18 @@ class SphinxRelation(SphinxSearch):
         self._result_cache = results
         return results
 
-    def _sphinx(self):
+    def set_sphinx(self, value):
+        self.__metadata = value
+        
+    def get_sphinx(self):
         if not self.__metadata:
             # We have to force execution if this is accessed beforehand
             self._get_data()
         return self.__metadata
-    _sphinx = property(_sphinx)
+    _sphinx = property(get_sphinx, set_sphinx)
+
+
+ESCAPE_RE = re.compile(r"([=\(\)|\-!@~\"&/\\\^\$\=])")
+
+def escape_query(value):
+    return ESCAPE_RE.sub(r"\\\1", value)

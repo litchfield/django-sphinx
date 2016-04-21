@@ -11,9 +11,13 @@ import djangosphinx.apis.current as sphinxapi
 __all__ = ('generate_config_for_model', 'generate_config_for_models')
 
 def _get_database_engine():
-    if settings.DATABASE_ENGINE == 'mysql':
+    if hasattr(settings, 'DATABASES'):
+        engine = settings.DATABASES['default']['ENGINE'].split('.')[-1]
+    else:
+        engine = settings.DATABASE_ENGINE
+    if engine == 'mysql':
         return settings.DATABASE_ENGINE
-    elif settings.DATABASE_ENGINE.startswith('postgresql'):
+    elif engine.startswith('postgresql'):
         return 'pgsql'
     raise ValueError, "Only MySQL and PostgreSQL engines are supported by Sphinx."
 
