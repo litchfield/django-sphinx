@@ -4,21 +4,19 @@ import time
 import struct
 import warnings
 import operator
-import apis.current as sphinxapi
 import logging
 import re
 try:
     import decimal
 except ImportError:
     from django.utils import _decimal as decimal # for Python 2.3
-
+from datetime import datetime, date
 from django.db.models.query import QuerySet, Q
+from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
+import djangosphinx.sphinxapi as sphinxapi
 
 __all__ = ('SearchError', 'ConnectionError', 'SphinxSearch', 'SphinxRelation', 'SphinxQuerySet', 'escape_query')
-
-from django.contrib.contenttypes.models import ContentType
-from datetime import datetime, date
 
 # server settings
 SPHINX_SERVER           = getattr(settings, 'SPHINX_SERVER', 'localhost')
@@ -86,11 +84,11 @@ class SphinxProxy(object):
         except RuntimeError:
             return False
 
-    def __unicode__(self):
-        try:
-            return unicode(self._current_object)
-        except RuntimeError:
-            return repr(self)
+    # def __unicode__(self):
+    #     try:
+    #         return unicode(self._current_object)
+    #     except RuntimeError:
+    #         return repr(self)
 
     def __dir__(self):
         try:
@@ -173,7 +171,7 @@ class SphinxProxy(object):
     __invert__ = lambda x: ~(x._current_object)
     __complex__ = lambda x: complex(x._current_object)
     __int__ = lambda x: int(x._current_object)
-    __long__ = lambda x: long(x._current_object)
+    #__long__ = lambda x: long(x._current_object)
     __float__ = lambda x: float(x._current_object)
     __oct__ = lambda x: oct(x._current_object)
     __hex__ = lambda x: hex(x._current_object)
@@ -225,7 +223,7 @@ class SphinxQuerySet(object):
         self.using                  = using
         
         options = self._format_options(**kwargs)
-        for key, value in options.iteritems():
+        for key, value in options.items():
             setattr(self, key, value)
 
         if model:
@@ -246,7 +244,7 @@ class SphinxQuerySet(object):
         return iter(self._get_data())
     
     def __getitem__(self, k):
-        if not isinstance(k, (slice, int, long)):
+        if not isinstance(k, (slice, int)): #, long)):
             raise TypeError
         assert (not isinstance(k, slice) and (k >= 0)) \
             or (isinstance(k, slice) and (k.start is None or k.start >= 0) and (k.stop is None or k.stop >= 0)), \
@@ -279,7 +277,7 @@ class SphinxQuerySet(object):
         kwargs['rankmode'] = getattr(sphinxapi, kwargs.get('rankmode', 'SPH_RANK_NONE'), None)
         kwargs['mode'] = getattr(sphinxapi, kwargs.get('mode', 'SPH_MATCH_ALL'), sphinxapi.SPH_MATCH_ALL)
 
-        kwargs = dict([('_%s' % (key,), value) for key, value in kwargs.iteritems() if key in self.available_kwargs])
+        kwargs = dict([('_%s' % (key,), value) for key, value in kwargs.items() if key in self.available_kwargs])
         return kwargs
 
     def get_queryset(self, model):
@@ -293,7 +291,7 @@ class SphinxQuerySet(object):
         return self._clone(**kwargs)
 
     def query(self, string, escape=False):
-        s = unicode(string).encode('utf-8')
+        s = str(string) #.encode('utf-8')
         if escape:
             s = escape_query(s)
         return self._clone(_query=s)
@@ -325,7 +323,7 @@ class SphinxQuerySet(object):
     # only works on attributes
     def filter(self, **kwargs):
         filters = self._filters.copy()
-        for k,v in kwargs.iteritems():
+        for k,v in kwargs.items():
             if hasattr(v, '__iter__'):
                 v = list(v)
             elif not (isinstance(v, list) or isinstance(v, tuple)):
@@ -350,7 +348,7 @@ class SphinxQuerySet(object):
     # only works on attributes
     def exclude(self, **kwargs):
         filters = self._excludes.copy()
-        for k,v in kwargs.iteritems():
+        for k,v in kwargs.items():
             if hasattr(v, 'next'):
                 v = list(v)
             elif not (isinstance(v, list) or isinstance(v, tuple)):
@@ -422,7 +420,7 @@ class SphinxQuerySet(object):
         # Clones the queryset passing any changed args
         c = self.__class__()
         c.__dict__.update(self.__dict__.copy())
-        for k, v in kwargs.iteritems():
+        for k, v in kwargs.items():
             setattr(c, k, v)
         return c
     
@@ -458,14 +456,14 @@ class SphinxQuerySet(object):
             client.SetWeights(map(int, self._weights))
         params.append('weights=%s' % (self._weights,))
 
-        params.append('matchmode=%s' % (self._mode,))
-        client.SetMatchMode(self._mode)
+        #params.append('matchmode=%s' % (self._mode,))
+        #client.SetMatchMode(self._mode)
         
         def _handle_filters(filter_list, exclude=False):
-            for name, values in filter_list.iteritems():
+            for name, values in filter_list.items():
                 parts = len(name.split('__'))
                 if parts > 2:
-                    raise NotImplementedError, 'Related object and/or multiple field lookups not supported'
+                    raise NotImplementedError('Related object and/or multiple field lookups not supported')
                 elif parts == 2:
                     # The float handling for __gt and __lt is kind of ugly..
                     name, lookup = name.split('__', 1)
@@ -497,7 +495,7 @@ class SphinxQuerySet(object):
                     elif lookup == 'range':
                         args = (name, values[0], values[1], exclude)
                     else:
-                        raise NotImplementedError, 'Related object and/or field lookup "%s" not supported' % lookup
+                        raise NotImplementedError('Related object and/or field lookup "%s" not supported' % lookup)
                     if is_float:
                         client.SetFilterFloatRange(*args)
                     elif not exclude and self.model and name == self.model._meta.pk.column:
@@ -545,8 +543,8 @@ class SphinxQuerySet(object):
         client.SetLimits(int(self._offset), int(self._limit), int(self._maxmatches))
         
         # To avoid modifying the Sphinx API, we solve unicode indexes here
-        if isinstance(self._index, unicode):
-            self._index = self._index.encode('utf-8')
+        if isinstance(self._index, str):
+            self._index = self._index #.encode('utf-8')
         
         results = client.Query(self._query, self._index)
         
@@ -554,9 +552,9 @@ class SphinxQuerySet(object):
 
         if not results:
             if client.GetLastError():
-                raise SearchError, client.GetLastError()
+                raise SearchError(client.GetLastError())
             elif client.GetLastWarning():
-                raise SearchError, client.GetLastWarning()
+                raise SearchError(client.GetLastWarning())
             else:
                 results = EMPTY_RESULT_SET
         elif not results['matches']:
@@ -608,7 +606,7 @@ class SphinxQuerySet(object):
                     
                     # XXX: Sometimes attrs is empty and we cannot have custom primary key attributes
                     for r in results['matches']:
-                        r['id'] = ', '.join([unicode(r['attrs'][p.column]) for p in pks])
+                        r['id'] = ', '.join([str(r['attrs'][p.column]) for p in pks])
             
                     # Join our Q objects to get a where clause which
                     # matches all primary keys, even across multiple columns
@@ -616,11 +614,11 @@ class SphinxQuerySet(object):
                     queryset = queryset.filter(q)
                 else:
                     for r in results['matches']:
-                        r['id'] = unicode(r['id'])
+                        r['id'] = str(r['id'])
                     queryset = queryset.filter(pk__in=[r['id'] for r in results['matches']])
                 if self._defer:
                     queryset = queryset.defer(*self._defer)
-                queryset = dict([(', '.join([unicode(getattr(o, p.attname)) for p in pks]), o) for o in queryset])
+                queryset = dict([(', '.join([str(getattr(o, p.attname)) for p in pks]), o) for o in queryset])
 
                 if self._passages:
                     # TODO: clean this up
@@ -639,7 +637,7 @@ class SphinxQuerySet(object):
                 objcache = {}
                 for r in results['matches']:
                     ct = r['attrs']['content_type']
-                    r['id'] = unicode(r['id'])
+                    r['id'] = str(r['id'])
                     objcache.setdefault(ct, {})[r['id']] = None
                 for ct in objcache:
                     model_class = ContentType.objects.get(pk=ct).model_class()
@@ -648,7 +646,7 @@ class SphinxQuerySet(object):
                     if results['matches'][0]['attrs'].get(pks[0].column):
                         for r in results['matches']:
                             if r['attrs']['content_type'] == ct:
-                                val = ', '.join([unicode(r['attrs'][p.column]) for p in pks])
+                                val = ', '.join([str(r['attrs'][p.column]) for p in pks])
                                 objcache[ct][r['id']] = r['id'] = val
                     
                         q = reduce(operator.or_, [reduce(operator.and_, [Q(**{p.name: r['attrs'][p.column]}) for p in pks]) for r in results['matches'] if r['attrs']['content_type'] == ct])
@@ -657,7 +655,7 @@ class SphinxQuerySet(object):
                         queryset = self.get_queryset(model_class).filter(pk__in=[r['id'] for r in results['matches'] if r['attrs']['content_type'] == ct])
 
                     for o in queryset:
-                        objcache[ct][', '.join([unicode(getattr(o, p.name)) for p in pks])] = o
+                        objcache[ct][', '.join([str(getattr(o, p.name)) for p in pks])] = o
                 
                 if self._passages:
                     for r in results['matches']:
@@ -678,8 +676,8 @@ class SphinxQuerySet(object):
             opts = self._passages_opts
         else:
             opts = {}
-        if isinstance(self._index, unicode):
-            self._index = self._index.encode('utf-8')
+        if isinstance(self._index, str):
+            self._index = self._index #.encode('utf-8')
         passages_list = client.BuildExcerpts(docs, self._index, words, opts)
         
         passages = {}
@@ -819,7 +817,7 @@ class SphinxRelation(SphinxSearch):
             ids = []
             for r in results['matches']:
                 value = r['attrs']['@groupby']
-                if isinstance(value, (int, long)):
+                if isinstance(value, int): #, long)):
                     ids.append(value)
                 else:
                     ids.extend()

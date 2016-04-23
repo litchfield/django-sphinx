@@ -6,7 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 
 import os.path
 
-import djangosphinx.apis.current as sphinxapi
+import djangosphinx.sphinxapi as sphinxapi
 
 __all__ = ('generate_config_for_model', 'generate_config_for_models')
 
